@@ -1,0 +1,65 @@
+import { expect, test, type Page } from '@playwright/test';
+
+async function login(page: Page, email: string, password = 'TestPassword123!') {
+  await page.goto('/');
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByLabel('Senha', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Entrar na central' }).click();
+  await expect(page.getByRole('heading', { name: 'Ordens de serviço.' })).toBeVisible();
+}
+test('solicitação, atribuição, solução, email real, aceite, PDF e consulta', async ({ browser }) => {
+  const requester = await browser.newContext({ acceptDownloads: true }); const admin = await browser.newContext(); const technician = await browser.newContext();
+  const requesterPage = await requester.newPage(); const adminPage = await admin.newPage(); const technicianPage = await technician.newPage();
+  await login(requesterPage, 'ana@example.com'); await requesterPage.getByRole('link', { name: 'Nova ordem' }).click();
+  await requesterPage.getByLabel('Título do chamado').fill('Computador não conecta à rede');
+  await requesterPage.getByLabel('Descrição', { exact: true }).fill('A conexão foi interrompida e o computador não acessa a rede.');
+  await requesterPage.getByRole('button', { name: 'Abrir ordem de serviço' }).click();
+  await expect(requesterPage.getByRole('heading', { name: 'Computador não conecta à rede' })).toBeVisible();
+  const orderPath = new URL(requesterPage.url()).pathname;
+  const downloadPromise = requesterPage.waitForEvent('download'); await requesterPage.getByRole('link', { name: 'Baixar PDF' }).click();
+  expect((await downloadPromise).suggestedFilename()).toMatch(/^OS-\d+\.pdf$/);
+  await login(adminPage, 'admin@example.com', 'InitialAdmin123!'); await adminPage.goto(orderPath);
+  await adminPage.getByLabel('Técnico', { exact: true }).selectOption({ label: 'Carlos Técnico' });
+  await adminPage.getByRole('button', { name: 'Atribuir OS', exact: true }).click();
+  await expect(adminPage.getByText('Atribuído a Carlos Técnico', { exact: true })).toBeVisible();
+  await login(technicianPage, 'carlos@example.com'); await technicianPage.goto(orderPath);
+  await technicianPage.getByLabel('Solução realizada').fill('Cabo de rede substituído. Conexão e acesso verificados com sucesso.');
+  await technicianPage.getByRole('button', { name: 'Resolver e solicitar aceite' }).click();
+  await expect(technicianPage.getByText('Email de aceite enviado.', { exact: true })).toBeVisible();
+  const messages = await (await technicianPage.request.get('http://127.0.0.1:18025/api/v1/messages')).json();
+  expect(messages.messages).toHaveLength(1);
+  const email = await (await technicianPage.request.get(`http://127.0.0.1:18025/api/v1/message/${messages.messages[0].ID}`)).json();
+  expect(email.To[0].Address).toBe('ana@example.com'); expect(email.HTML).toContain('cid:acceptance-qr');
+  const raw = await (await technicianPage.request.get(`http://127.0.0.1:18025/api/v1/message/${messages.messages[0].ID}/raw`)).text();
+  expect(raw).toContain('image/png');
+  const confirmationLink = email.Text.match(/http:\/\/127\.0\.0\.1:3317\/confirmacao\/[a-f0-9]{64}/)![0];
+  const publicContext = await browser.newContext(); const confirmation = await publicContext.newPage();
+  await confirmation.goto(confirmationLink); await expect(confirmation.getByRole('heading', { name: 'O problema foi resolvido?' })).toBeVisible();
+  await requesterPage.reload(); await expect(requesterPage.getByText('Aceite pendente', { exact: true })).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Confirmar atendimento' }).click();
+  await expect(confirmation.getByRole('heading', { name: 'Aceite confirmado' })).toBeVisible();
+  await requesterPage.reload(); await expect(requesterPage.getByText('Aceite confirmado', { exact: true })).toBeVisible();
+  await requesterPage.screenshot({ path: 'test-results/order-desktop.png', fullPage: true });
+  await requesterPage.goto('/'); await requesterPage.getByLabel('Solicitante', { exact: true }).fill('Ana');
+  await requesterPage.getByRole('button', { name: 'Consultar', exact: true }).click();
+  await expect(requesterPage.getByRole('link', { name: /Computador não conecta/ })).toBeVisible();
+  await requesterPage.screenshot({ path: 'test-results/list-desktop.png', fullPage: true });
+  await requesterPage.setViewportSize({ width: 390, height: 844 }); await requesterPage.screenshot({ path: 'test-results/list-mobile.png', fullPage: true });
+  expect(await requesterPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await requester.close(); await admin.close(); await technician.close(); await publicContext.close();
+});
+test('administrador cria conta e solicitante troca senha temporária', async ({ browser }) => {
+  const adminContext = await browser.newContext(); const admin = await adminContext.newPage();
+  await login(admin, 'admin@example.com', 'InitialAdmin123!'); await admin.getByRole('link', { name: 'Usuários', exact: true }).click();
+  await admin.getByLabel('Nome', { exact: true }).fill('Elisa Solicitante'); await admin.getByLabel('Email', { exact: true }).fill('elisa@example.com');
+  await admin.getByLabel('Senha temporária', { exact: true }).fill('TemporaryPass123!'); await admin.getByRole('button', { name: 'Criar conta' }).click();
+  await expect(admin.getByText('Elisa Solicitante', { exact: true })).toBeVisible();
+  const context = await browser.newContext(); const page = await context.newPage(); await page.goto('/');
+  await page.getByLabel('Email', { exact: true }).fill('elisa@example.com'); await page.getByLabel('Senha', { exact: true }).fill('TemporaryPass123!');
+  await page.getByRole('button', { name: 'Entrar na central' }).click(); await expect(page.getByRole('heading', { name: 'Defina sua senha' })).toBeVisible();
+  await page.getByLabel('Senha atual', { exact: true }).fill('TemporaryPass123!'); await page.getByLabel('Nova senha', { exact: true }).fill('PermanentPass123!');
+  await page.getByLabel('Repita a nova senha').fill('PermanentPass123!'); await page.getByRole('button', { name: 'Salvar nova senha' }).click();
+  await expect(page.getByRole('heading', { name: 'Ordens de serviço.' })).toBeVisible(); await page.getByRole('button', { name: 'Sair', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Acesse sua conta' })).toBeVisible();
+  await adminContext.close(); await context.close();
+});
