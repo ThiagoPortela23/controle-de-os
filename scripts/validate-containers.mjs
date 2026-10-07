@@ -9,6 +9,16 @@ async function main() {
   capture(['compose', 'config', '--quiet']);
   // Configuration can contain secrets: keep it in memory and never log or save it.
   const config = JSON.parse(capture(['compose', 'config', '--format', 'json']));
+  const environment = Object.fromEntries(Object.entries(config.services.app.environment).map(([key, value]) => [key, String(value ?? '')]));
+  // Validate before recreating a running application. Secrets travel through stdin, not argv or logs.
+  const settings = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    import { readFileSync } from 'node:fs';
+    import { parseConfig } from './server/src/config.ts';
+    try { parseConfig(JSON.parse(readFileSync(0, 'utf8'))); }
+    catch (error) { console.log(error instanceof Error ? error.message : 'Configuração inválida.'); process.exitCode = 1; }
+  `], { input: JSON.stringify(environment), encoding: 'utf8', windowsHide: true });
+  if (settings.error) throw settings.error;
+  assert.equal(settings.status, 0, settings.stdout.trim() || 'Configuração inválida.');
   const portOf = (service, target) => {
     const binding = config.services[service].ports.find(port => Number(port.target) === target && port.protocol === 'tcp');
     assert.ok(binding?.published, `Porta ${target} não publicada para ${service}.`);
@@ -21,7 +31,6 @@ async function main() {
   assert.equal(up.status, 0, 'Falha ao construir ou iniciar os containers.');
 
   const appUrl = `http://127.0.0.1:${portOf('app', 3000)}`;
-  const mailpitUrl = `http://127.0.0.1:${portOf('mailpit', 8025)}`;
   async function getJson(url, expected = 200) {
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     assert.equal(response.status, expected, `HTTP inesperado para ${new URL(url).pathname}.`);
@@ -87,14 +96,10 @@ async function main() {
   console.log('OK: PostgreSQL 17, migrations e administrador inicial.');
 
   const smtp = capture(['compose', 'exec', '-T', 'app', 'node', '--input-type=module', '-e', `
-    import nodemailer from 'nodemailer';
     import { readConfig } from './dist/server/config.js';
+    import { createSmtpTransport } from './dist/server/email.js';
     const config = readConfig();
-    const transport = nodemailer.createTransport({
-      host: config.SMTP_HOST, port: config.SMTP_PORT, secure: config.SMTP_SECURE,
-      auth: config.SMTP_USER ? { user: config.SMTP_USER, pass: config.SMTP_PASS } : undefined,
-      connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
-    });
+    const transport = createSmtpTransport(config);
     try { await transport.verify(); console.log('SMTP_OK'); }
     catch { process.exitCode = 1; }
     finally { transport.close(); }
@@ -102,10 +107,7 @@ async function main() {
   assert.equal(smtp.trim(), 'SMTP_OK', 'A aplicação não conseguiu conectar ao SMTP configurado.');
   console.log('OK: conexão SMTP a partir do container da aplicação, sem envio de mensagens.');
 
-  const messages = await getJson(`${mailpitUrl}/api/v1/messages`);
-  assert.ok(Array.isArray(messages.messages));
-  console.log('OK: Mailpit disponível.');
-  console.log(`Validação concluída. Navegador: ${origin} | API local: ${appUrl} | Mailpit: ${mailpitUrl}`);
+  console.log(`Validação concluída. Navegador: ${origin} | API local: ${appUrl}`);
 }
 
 main().catch(error => {

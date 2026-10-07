@@ -14,6 +14,7 @@
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p client/tsconfig.json --noEmit && tsc -p tests/tsconfig.json",
     "start": "node dist/server/start.js",
     "db:migrate": "tsx server/src/migrate.ts",
+    "check:smtp": "tsx server/src/check-smtp.ts",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
     "test:serve": "tsx tests/e2e-server.ts",

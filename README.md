@@ -51,7 +51,7 @@ No PowerShell, dentro do projeto:
 Copy-Item .env.example .env
 ```
 
-Edite `.env`: defina `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD` e um `SESSION_SECRET` aleatório de pelo menos 32 caracteres. Para gerar um segredo:
+Edite `.env`: defina `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `POSTGRES_PASSWORD`, um `SESSION_SECRET` aleatório de pelo menos 32 caracteres e as credenciais Gmail em `SMTP_USER`/`SMTP_PASS`, conforme a seção **Gmail e envio real**. A aplicação valida a configuração SMTP antes de iniciar. Para gerar um segredo:
 
 ```powershell
 node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
@@ -66,7 +66,7 @@ docker compose logs app
 ```
 
 - Aplicação: http://localhost:3000
-- Emails de teste no Mailpit: http://localhost:8025
+- Emails reais: enviados pelo Gmail ao endereço cadastrado do solicitante quando o técnico resolve a OS.
 - O administrador inicial vem das variáveis `ADMIN_*`. A primeira entrada exige trocar a senha.
 - Migrations são aplicadas automaticamente antes da aplicação iniciar. O bootstrap não altera senhas de contas existentes.
 - O volume `postgres_data` preserva dados entre reinicializações. `docker compose down` preserva esse volume; não use `--volumes` para parar uma instância com dados que deseja manter.
@@ -110,31 +110,83 @@ Os filtros combinam data de abertura, nome parcial do solicitante e número exat
 
 O PDF está disponível desde a abertura e reflete o estado atual: identificação, descrição, solução, histórico e registros do aceite. Ao confirmar o atendimento, um novo download inclui a confirmação.
 
-## QR pelo celular e SMTP real
+## Gmail e envio real
+
+Na execução normal, o Compose inicia somente aplicação e PostgreSQL. O Mailpit não é uma dependência da aplicação. A resolução da OS dispara o email com botão e QR code para o endereço do solicitante registrado na abertura; cadastrar uma conta, por si só, não dispara emails.
+
+1. Entre na conta Google que será usada como remetente e ative a **Verificação em duas etapas**.
+2. Abra [Senhas de app](https://myaccount.google.com/apppasswords), informe **Central de Serviços** e gere a senha. Essa opção pode não estar disponível em algumas contas de organizações ou com Proteção Avançada. Consulte as [instruções do Google](https://support.google.com/accounts/answer/185833?hl=pt-BR).
+3. Preencha somente no `.env` local:
+
+```dotenv
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=SEU_EMAIL_GMAIL
+SMTP_PASS=SENHA_DE_APLICATIVO_COM_16_CARACTERES
+SMTP_FROM=
+```
+
+Substitua os valores indicados; a aplicação remove os espaços de apresentação da senha de aplicativo do Gmail. `SMTP_FROM` vazio usa automaticamente `Central de Serviços <SMTP_USER>`. O remetente é a conta SMTP; o destinatário é o solicitante da OS e pode usar outro provedor de email. A senha SMTP é independente das senhas dos usuários da aplicação. As [opções de TLS do Nodemailer](https://nodemailer.com/smtp) definem conexão segura imediata na porta 465; a alternativa 587 exige `SMTP_SECURE=false` e usa STARTTLS obrigatório para Gmail.
+
+4. Confira conexão e autenticação, sem enviar mensagem:
+
+```powershell
+npm.cmd run check:smtp
+```
+
+Para conferir pelo Docker, inclusive sem iniciar a aplicação principal:
+
+```powershell
+docker compose build app
+docker compose run --rm --no-deps -T app node dist/server/check-smtp.js
+```
+
+5. Após a verificação passar, aplique a configuração e pare a captura antiga, se ainda estiver ativa:
+
+```powershell
+docker compose up -d --build --wait app db
+docker compose --profile mail-test stop mailpit
+```
+
+6. Crie uma conta solicitante com email real, abra uma OS, atribua um técnico e resolva informando a solução. Confira a caixa de entrada do solicitante; o email contém o botão e o QR de aceite. O status **Enviado** indica que o SMTP aceitou o destinatário e a mensagem, não uma confirmação de leitura ou de chegada à caixa de entrada. Falhas mantêm a resolução e o aceite pendente; a tela informa problemas de autenticação/conexão e permite **Reenviar email** após corrigir a configuração.
+
+O `.env` fica fora do Git; mantenha as credenciais nele. Alterações no arquivo exigem recriar o container da aplicação ou reiniciar o backend local. A aplicação não inicia com campos Gmail ausentes/incompatíveis, e a validação dos containers verifica a configuração antes de recriar serviços.
+
+### Captura opcional para desenvolvimento
+
+Mailpit fica exclusivamente no perfil `mail-test`, opcional para testes locais. Para usar essa captura, configure explicitamente `SMTP_HOST=mailpit`, `SMTP_PORT=1025`, `SMTP_SECURE=false`, `SMTP_USER=`, `SMTP_PASS=` e `SMTP_FROM=os@example.com`, e execute:
+
+```powershell
+docker compose --profile mail-test up -d --build
+```
+
+Nesse modo de teste, as mensagens ficam em http://localhost:8025 e não chegam a caixas externas. Os testes automatizados de navegador usam seu próprio Mailpit e PostgreSQL isolados, sem as credenciais Gmail reais.
+
+## QR pelo celular e endereço da aplicação
 
 Para o celular acessar a aplicação local, configure `APP_PUBLIC_URL` com o IP real do computador na rede e a porta `3000`, por exemplo `http://<IP-DO-COMPUTADOR>:3000`. Reinicie a aplicação e reenvie o email para gerar outro link. Celular e computador precisam de conectividade; o firewall deve permitir a porta. `localhost` no celular aponta para o próprio celular.
 
-O Mailpit captura emails para desenvolvimento; não os entrega a caixas externas. Para SMTP real, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` e `SMTP_FROM`. Porta 465 normalmente usa `SMTP_SECURE=true`; STARTTLS na porta 587 usa `false`.
+O email usa `APP_PUBLIC_URL` para o botão e o QR. Para acesso fora da rede local, configure um domínio/endereço público acessível ao destinatário. Um link com `localhost` só funciona no computador em que a aplicação está rodando.
 
 Para uma publicação futura, use `NODE_ENV=production`, `APP_PUBLIC_URL` com HTTPS e um reverse proxy TLS. A aplicação confia em um proxy e ativa cookies seguros em produção; restrinja o acesso direto ao backend. As credenciais de exemplo e as portas do Mailpit são para desenvolvimento. A publicação externa não faz parte desta entrega.
 
 ## Desenvolvimento sem container da aplicação
 
-Inicie somente banco e Mailpit:
+Inicie somente o banco; o SMTP Gmail continua configurado no `.env`:
 
 ```powershell
 docker compose stop app
-docker compose up -d db mailpit
+docker compose up -d db
 npm.cmd ci
 ```
 
-Ajuste `DATABASE_URL` em `.env` para `localhost:5433` (ou a porta definida em `POSTGRES_PORT`), conforme a senha configurada. Para o frontend Vite e o SMTP local:
+Ajuste `DATABASE_URL` em `.env` para `localhost:5433` (ou a porta definida em `POSTGRES_PORT`), conforme a senha configurada. Para o frontend Vite:
 
 A porta `5432` é interna ao container do banco; o Node executado no Windows usa a porta publicada `5433`. Apontar para `localhost:5432` pode acessar outro PostgreSQL instalado no computador e gerar `password authentication failed for user "os"`. O container `app` deve ficar parado neste modo para liberar a porta `3000` ao backend local. Após alterar `.env`, reinicie `npm.cmd run dev`.
 
 ```powershell
 $env:APP_PUBLIC_URL = 'http://localhost:5173'
-$env:SMTP_HOST = 'localhost'
 npm.cmd run dev
 ```
 
@@ -144,7 +196,7 @@ Se aparecer **Origem não permitida**, `APP_PUBLIC_URL` precisa corresponder ao 
 
 Se a API estiver no Docker, altere `APP_PUBLIC_URL` em `.env` e aplique com `docker compose up -d --force-recreate app`. Se estiver executando `npm.cmd run dev`, pare e inicie novamente após ajustar a variável. Uma variável `$env:APP_PUBLIC_URL` já definida no terminal tem precedência sobre `.env`; ajuste-a também. Recarregue a página após reiniciar a API. A validação de origem e o token CSRF devem permanecer ativos.
 
-Para executar a versão compilada fora do Docker, use `APP_PUBLIC_URL=http://localhost:3000`, `SMTP_HOST=localhost`, `npm.cmd run build` e `npm.cmd start`.
+Para executar a versão compilada fora do Docker, use `APP_PUBLIC_URL=http://localhost:3000`, mantenha o SMTP configurado, execute `npm.cmd run build` e `npm.cmd start`. Se optar pelo Mailpit de testes, o backend no Windows usa `SMTP_HOST=localhost` e porta 1025 em vez do nome interno do serviço Docker.
 
 ## Validação
 
@@ -167,7 +219,7 @@ Com o engine Docker disponível e o `.env` configurado:
 npm.cmd run validate:containers
 ```
 
-O comando valida o Compose, constrói a imagem, inicia os serviços e verifica a API, o bundle React, as proteções de sessão/CSRF, o PostgreSQL 17, as migrations, o administrador inicial e o Mailpit. Também verifica a conexão com o SMTP a partir do container da aplicação, sem enviar mensagens. Os serviços permanecem em execução após a validação. Não cria usuários nem OS de teste e não altera senhas existentes.
+O comando valida o Compose e a configuração, constrói a imagem, inicia aplicação/banco e verifica a API, o bundle React, sessão/CSRF, PostgreSQL 17, migrations e administrador inicial. Também verifica conexão/autenticação com o SMTP a partir do container, sem enviar mensagens e sem exigir Mailpit. Configurações incompletas são rejeitadas antes de recriar a aplicação. Os serviços permanecem em execução após a validação. Não cria usuários nem OS de teste e não altera senhas existentes.
 
 Se o comando não encontrar `docker` em uma sessão antiga do terminal, reabra o terminal ou defina `DOCKER_BINARY` com o caminho do `docker.exe`. Os testes de integração e navegador abaixo continuam cobrindo o atendimento completo em um banco isolado.
 
@@ -271,7 +323,7 @@ Se o envio falhar, a solução permanece registrada. O técnico responsável ou 
 
 ### 5. Solicitante confirma ou recusa
 
-1. Abra o email recebido e clique em **Revisar atendimento** ou escaneie o QR code. No ambiente local padrão, consulte o email no Mailpit em http://localhost:8025.
+1. Abra a caixa de entrada do email cadastrado e clique em **Revisar atendimento** ou escaneie o QR code. O envio normal usa Gmail; somente no perfil opcional de captura as mensagens ficam no Mailpit.
 2. Revise a descrição, o técnico e a solução na página de confirmação. Não é necessário fazer login; abrir o link não registra o aceite.
 3. Se o problema foi resolvido, clique em **Confirmar atendimento**. A OS permanece resolvida e passa a mostrar **Aceite confirmado**, com data e registro no histórico.
 4. Se o problema continua, clique em **O problema continua**, preencha a justificativa e clique em **Recusar e reabrir OS**. A ordem volta para **Aberto**, sem técnico atribuído, com **Aceite recusado** e o atendimento anterior preservado no histórico.
