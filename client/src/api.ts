@@ -1,4 +1,5 @@
 let csrfToken = '';
+export class ApiError extends Error { constructor(message: string, public status: number) { super(message); } }
 export function setCsrf(token: string) { csrfToken = token; }
 export async function api<T>(path: string, options: RequestInit & { public?: boolean } = {}): Promise<T> {
   const { public: isPublic, ...init } = options;
@@ -14,7 +15,10 @@ export async function api<T>(path: string, options: RequestInit & { public?: boo
   }
   const response = await fetch(`/api${path}`, { ...init, headers, credentials: 'same-origin' });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.message || 'Não foi possível completar a operação.');
+  if (!response.ok) {
+    if (response.status === 401 && path !== '/auth/login') window.dispatchEvent(new Event('session-expired'));
+    throw new ApiError(data.message || 'Não foi possível completar a operação.', response.status);
+  }
   return data as T;
 }
 export const json = (value: unknown) => JSON.stringify(value);

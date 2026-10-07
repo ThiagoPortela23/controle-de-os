@@ -10,8 +10,11 @@ try {
   await migrate(pool);
   await bootstrapAdmin(pool, config);
   const app = createApp(pool, config, createMailer(config));
-  const server = app.listen(config.PORT, '0.0.0.0', () => console.log(`Controle de OS disponível na porta ${config.PORT}.`));
+  const server = app.listen(config.PORT, '0.0.0.0', () => console.log(`Central de Serviços disponível na porta ${config.PORT}.`));
+  let stopping = false;
   const shutdown = () => {
+    if (stopping) return; stopping = true;
+    void app.locals.realtime.close();
     server.close(async () => { app.locals.sessionStore.close(); await pool.end(); process.exit(0); });
     setTimeout(() => process.exit(1), 10_000).unref();
   };

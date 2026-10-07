@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { transaction } from './db.js';
-import { canReadOrder, requireCondition, newToken, tokenHash } from './security.js';
+import { canReadOrder, requireCondition, newToken, tokenHash, HttpError } from './security.js';
 import type { User, Order, Confirmation, Delivery, OrderEvent } from './types.js';
 
 async function lockedOrder(client: PoolClient, id: string) {
@@ -32,6 +32,15 @@ export class Orders {
   constructor(private pool: Pool) {}
   async create(user: User, title: string, description: string) {
     return transaction(this.pool, async client => {
+      const requester = await client.query('SELECT id FROM users WHERE id=$1 AND active=TRUE FOR UPDATE', [user.id]);
+      requireCondition(requester.rowCount, 401, 'Sessão inválida. Entre novamente.');
+      const quota = (await client.query<{ total: string; retry_after: number }>(
+        `SELECT COUNT(*) AS total,
+         GREATEST(1, CEIL(EXTRACT(EPOCH FROM (MIN(created_at) + INTERVAL '60 minutes' - NOW()))))::int AS retry_after
+         FROM orders WHERE requester_id=$1 AND created_at > NOW() - INTERVAL '60 minutes'`, [user.id],
+      )).rows[0];
+      if (Number(quota.total) >= 10) throw new HttpError(429,
+        'Você atingiu o limite de 10 chamados em 60 minutos. Aguarde antes de abrir outro.', quota.retry_after);
       const order = (await client.query<Order>(
         'INSERT INTO orders(requester_id,requester_name,requester_email,title,description) VALUES ($1,$2,$3,$4,$5) RETURNING *',
         [user.id, user.name, user.email, title, description],

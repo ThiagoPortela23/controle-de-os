@@ -15,3 +15,9 @@ export interface Detail extends Order {
     email_status: 'PENDING' | 'SENT' | 'FAILED'; created_at: string }[];
 }
 export interface List { items: Order[]; total: number; page: number; pageSize: number }
+export interface Ranking { id: string; name: string; total: number }
+export interface DashboardData {
+  dailyTotal: number; monthlyTotal: number; open: number; assigned: number; pendingAcceptance: number;
+  assignedRanking: Ranking[]; resolvedRanking: Ranking[];
+  monthlySeries: { month: number; opened: number; resolved: number }[];
+}

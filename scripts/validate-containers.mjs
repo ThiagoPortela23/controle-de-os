@@ -33,23 +33,42 @@ async function main() {
   const home = await fetch(appUrl, { signal: AbortSignal.timeout(10_000) });
   assert.equal(home.status, 200);
   const html = await home.text();
+  assert.match(html, /Central de Serviços/);
   assert.match(html, /<div id="root"><\/div>/);
   const asset = html.match(/src="([^\"]+\.js)"/);
   assert.ok(asset, 'Bundle React não encontrado.');
   const bundle = await fetch(new URL(asset[1], appUrl), { signal: AbortSignal.timeout(10_000) });
   assert.equal(bundle.status, 200);
   assert.match(bundle.headers.get('content-type') || '', /javascript/);
+  const logo = await fetch(new URL('/logo.svg', appUrl), { signal: AbortSignal.timeout(10_000) });
+  assert.equal(logo.status, 200);
+  assert.match(await logo.text(), /<svg/);
   console.log('OK: frontend React compilado e servido.');
 
   await getJson(`${appUrl}/api/orders`, 401);
+  await getJson(`${appUrl}/api/dashboard?year=2026&month=1`, 401);
+  await getJson(`${appUrl}/api/events`, 401);
   const csrf = await fetch(`${appUrl}/api/auth/csrf`, { signal: AbortSignal.timeout(10_000) });
   assert.equal(csrf.status, 200);
-  assert.ok((await csrf.json()).csrfToken);
+  const csrfToken = (await csrf.json()).csrfToken;
+  assert.ok(csrfToken);
   assert.match(csrf.headers.get('set-cookie') || '', /HttpOnly/i);
   const rejected = await fetch(`${appUrl}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(10_000),
   });
   assert.equal(rejected.status, 403);
+  const cookie = csrf.headers.get('set-cookie').split(';')[0];
+  const origin = new URL(config.services.app.environment.APP_PUBLIC_URL).origin;
+  const allowed = await fetch(`${appUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrfToken },
+    body: '{}', signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(allowed.status, 400, 'A origem configurada deve alcançar a validação do login.');
+  const foreign = await fetch(`${appUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: 'https://foreign.example', 'X-CSRF-Token': csrfToken },
+    body: '{}', signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(foreign.status, 403);
   console.log('OK: sessão, autenticação obrigatória e proteção CSRF.');
 
   const database = JSON.parse(capture(['compose', 'exec', '-T', 'db', 'psql', '-U', 'os', '-d', 'controle_os', '-At', '-c',
@@ -57,12 +76,14 @@ async function main() {
       'major', current_setting('server_version_num')::int / 10000,
       'migrations', (SELECT COUNT(*) FROM schema_migrations),
       'tables', (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('users','orders','order_events','confirmations','sessions')),
-      'admin', EXISTS(SELECT 1 FROM users WHERE role='ADMIN' AND active=TRUE)
+      'admin', EXISTS(SELECT 1 FROM users WHERE role='ADMIN' AND active=TRUE),
+      'triggers', (SELECT COUNT(*) FROM pg_trigger WHERE tgname IN ('orders_notify','confirmation_email_notify') AND NOT tgisinternal)
     )`]).trim());
   assert.equal(database.major, 17);
-  assert.ok(database.migrations >= 1);
+  assert.ok(database.migrations >= 2);
   assert.equal(database.tables, 5);
   assert.equal(database.admin, true);
+  assert.equal(database.triggers, 2);
   console.log('OK: PostgreSQL 17, migrations e administrador inicial.');
 
   const smtp = capture(['compose', 'exec', '-T', 'app', 'node', '--input-type=module', '-e', `
@@ -84,7 +105,7 @@ async function main() {
   const messages = await getJson(`${mailpitUrl}/api/v1/messages`);
   assert.ok(Array.isArray(messages.messages));
   console.log('OK: Mailpit disponível.');
-  console.log(`Validação concluída. Aplicação: ${appUrl} | Mailpit: ${mailpitUrl}`);
+  console.log(`Validação concluída. Navegador: ${origin} | API local: ${appUrl} | Mailpit: ${mailpitUrl}`);
 }
 
 main().catch(error => {

@@ -1,4 +1,4 @@
-import { after, before, test } from 'node:test';
+import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -39,12 +39,14 @@ before(async () => {
   admin = await login('admin@example.com', 'InitialAdmin123!'); ana = await login('ana@example.com');
   bruno = await login('bruno@example.com'); carlos = await login('carlos@example.com'); diana = await login('diana@example.com');
 }, { timeout: 60_000 });
-after(async () => { app?.locals.sessionStore.close(); await database?.stop(); });
+// Keep shared historical fixtures while giving each scenario a fresh opening quota.
+beforeEach(async () => { await database.pool.query("UPDATE orders SET created_at=NOW()-INTERVAL '2 hours' WHERE created_at>NOW()-INTERVAL '1 hour'"); });
+after(async () => { await app?.locals.realtime.close(); app?.locals.sessionStore.close(); await database?.stop(); });
 
 test('migrations são idempotentes e o banco é PostgreSQL 17', async () => {
   await migrate(database.pool);
   assert.match((await database.pool.query('SELECT version()')).rows[0].version, /PostgreSQL 17/);
-  assert.equal((await database.pool.query('SELECT count(*) FROM schema_migrations')).rows[0].count, '1');
+  assert.equal((await database.pool.query('SELECT count(*) FROM schema_migrations')).rows[0].count, '2');
 });
 test('sessão persistida, cookie HttpOnly e bloqueio CSRF/origem', async () => {
   assert.ok(Number((await database.pool.query('SELECT count(*) FROM sessions')).rows[0].count) >= 5);
@@ -166,14 +168,21 @@ test('filtros combinados, datas de Brasília, validação e paginação', async 
   await admin.agent.get('/api/orders?number=abc').expect(400);
   await admin.agent.get('/api/orders?page=0').expect(400);
   assert.equal((await admin.agent.get('/api/orders?requester=%25')).body.total, 0);
-  for (let index = 0; index < 22; index++) await post(bruno, '/orders', { title: `Consulta ${index}`, description: 'Ordem para paginação.' }).expect(201);
+  // Bulk historical fixtures are not new submissions subject to the opening quota.
+  for (let index = 0; index < 22; index++) await database.pool.query(
+    `INSERT INTO orders(requester_id,requester_name,requester_email,title,description,created_at)
+     VALUES ($1,'Bruno Solicitante','bruno@example.com',$2,'Ordem para paginação.',NOW()-INTERVAL '2 hours')`, [bruno.id, `Consulta ${index}`]);
   const first = (await bruno.agent.get('/api/orders?page=1')).body;
   const second = (await bruno.agent.get('/api/orders?page=2')).body;
   assert.equal(first.items.length, 20); assert.equal(second.items.length, 2); assert.equal(first.total, 22);
   assert.equal(new Set([...first.items, ...second.items].map((order: { id: string }) => order.id)).size, 22);
 });
 test('PDF desde abertura, acentos e conteúdo longo distribuído em páginas', async () => {
-  const order = await opened('Descrição: conexão, impressão e solução.\n'.repeat(260));
+  const order = (await database.pool.query(
+    `INSERT INTO orders(requester_id,requester_name,requester_email,title,description,created_at)
+     VALUES ($1,'Ana Solicitante','ana@example.com','Registro antigo com texto longo',$2,NOW()-INTERVAL '1 year') RETURNING *`,
+    [ana.id, 'Descrição: conexão, impressão e solução.\n'.repeat(260)],
+  )).rows[0];
   const result = await ana.agent.get(`/api/orders/${order.id}/pdf`).buffer(true).expect(200);
   assert.match(result.headers['content-disposition'], new RegExp(`OS-${order.number}\\.pdf`));
   const loadingTask = getDocument({ data: new Uint8Array(result.body), useSystemFonts: true });

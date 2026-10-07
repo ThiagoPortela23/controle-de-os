@@ -13,6 +13,8 @@ import { Orders } from './orders.js';
 import { csrf, auth, role, HttpError, requireCondition, hashPassword, verifyPassword, newToken, publicUser } from './security.js';
 import { deliver, type Mailer } from './email.js';
 import { orderPdf } from './pdf.js';
+import { dashboard } from './dashboard.js';
+import { Realtime } from './realtime.js';
 
 const password = z.string().min(10, 'Use pelo menos 10 caracteres.').max(128);
 const uuid = z.uuid();
@@ -26,6 +28,8 @@ const saveSession = (req: express.Request) => new Promise<void>((resolve, reject
 export function createApp(pool: Pool, config: Config, mailer: Mailer) {
   const app = express();
   const orders = new Orders(pool);
+  const realtime = new Realtime(pool);
+  app.locals.realtime = realtime;
   if (config.NODE_ENV === 'production') app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: {
@@ -73,6 +77,7 @@ export function createApp(pool: Pool, config: Config, mailer: Mailer) {
   app.use('/api', auth(pool), (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/auth/me', (req, res) => res.json({ user: publicUser(req.user!), csrfToken: req.session.csrf }));
   app.post('/api/auth/logout', async (req, res) => {
+    realtime.disconnectSession(req.sessionID);
     await new Promise<void>((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve()));
     res.clearCookie('os.sid', { httpOnly: true, sameSite: 'strict', secure: config.NODE_ENV === 'production' }).json({ message: 'Sessão encerrada.' });
   });
@@ -83,6 +88,7 @@ export function createApp(pool: Pool, config: Config, mailer: Mailer) {
     requireCondition(await verifyPassword(input.currentPassword, stored.password_hash), 400, 'Senha atual incorreta.');
     await pool.query('UPDATE users SET password_hash=$2,must_change_password=FALSE WHERE id=$1', [req.user!.id, await hashPassword(input.newPassword)]);
     await pool.query("DELETE FROM sessions WHERE sess->>'userId'=$1 AND sid<>$2", [req.user!.id, req.sessionID]);
+    realtime.disconnectUser(req.user!.id, req.sessionID);
     req.session.csrf = newToken(); await saveSession(req);
     res.json({ user: publicUser({ ...req.user!, must_change_password: false }), csrfToken: req.session.csrf });
   });
@@ -112,7 +118,19 @@ export function createApp(pool: Pool, config: Config, mailer: Mailer) {
     )).rows[0];
     requireCondition(user, 404, 'Usuário não encontrado.');
     await pool.query("DELETE FROM sessions WHERE sess->>'userId'=$1", [id]);
+    realtime.disconnectUser(id);
     res.json(publicUser(user));
+  });
+  app.get('/api/events', async (req, res) => { await realtime.subscribe(req, res); });
+  const readLimiter = rateLimit({ windowMs: 60_000, limit: 120,
+    keyGenerator: req => req.user!.id, standardHeaders: 'draft-8', legacyHeaders: false,
+    skip: req => !['GET', 'HEAD'].includes(req.method),
+    message: { message: 'Muitas consultas. Aguarde um minuto.' } });
+  app.use(['/api/orders', '/api/dashboard'], readLimiter);
+  app.get('/api/dashboard', role('ADMIN'), async (req, res) => {
+    const input = z.object({ year: z.coerce.number().int().min(2000).max(9999),
+      month: z.coerce.number().int().min(1).max(12) }).parse(req.query);
+    res.json(await dashboard(pool, input.year, input.month));
   });
   app.get('/api/orders', async (req, res) => {
     const input = z.object({ from: date.optional(), to: date.optional(), requester: z.string().trim().max(120).optional(),
@@ -121,7 +139,8 @@ export function createApp(pool: Pool, config: Config, mailer: Mailer) {
     res.json(await orders.list(req.user!, input));
   });
   app.post('/api/orders', role('REQUESTER'), async (req, res) => {
-    const input = z.object({ title: z.string().trim().min(3).max(200), description: z.string().trim().min(5).max(20000) }).parse(req.body);
+    const input = z.object({ title: z.string().trim().min(3).max(50, 'O título permite até 50 caracteres.'),
+      description: z.string().trim().min(5).max(255, 'A descrição permite até 255 caracteres.') }).parse(req.body);
     res.status(201).json(await orders.create(req.user!, input.title, input.description));
   });
   app.get('/api/orders/:id', async (req, res) => res.json(await orders.detail(req.user!, uuid.parse(req.params.id))));
@@ -155,7 +174,10 @@ export function createApp(pool: Pool, config: Config, mailer: Mailer) {
   }
   const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     if (error instanceof ZodError) { res.status(400).json({ message: error.issues.map(issue => issue.message).join(' ') }); return; }
-    if (error instanceof HttpError) { res.status(error.status).json({ message: error.message }); return; }
+    if (error instanceof HttpError) {
+      if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+      res.status(error.status).json({ message: error.message, ...(error.retryAfter ? { retryAfterSeconds: error.retryAfter } : {}) }); return;
+    }
     if (error.code === '23505') { res.status(409).json({ message: 'Este email já está cadastrado.' }); return; }
     if (error.type === 'entity.too.large') { res.status(413).json({ message: 'Conteúdo muito grande.' }); return; }
     if (error instanceof SyntaxError && 'body' in error) { res.status(400).json({ message: 'JSON inválido.' }); return; }

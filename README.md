@@ -1,6 +1,31 @@
-# Controle de ordens de serviço
+# Central de Serviços
 
 Aplicação em Node.js 24, Express 5, React, TypeScript e PostgreSQL 17. Interface em português, responsiva, com autorização no backend, PDF e aceite por email/QR code.
+
+## Chamados, dashboard e preferências
+
+Todos os perfis entram em **Chamados** (`/ordens`); o endereço `/` redireciona para essa tela. O solicitante abre e acompanha somente suas OS, com filtros de data e número. Técnicos consultam seus atendimentos. Administradores também acessam **Dashboard** e **Usuários** pelo menu.
+
+Novos chamados têm título de 3 a 50 caracteres e descrição de 5 a 255 caracteres, após remover espaços das extremidades. Contadores aparecem no formulário; a API também valida os limites. Cada solicitante pode abrir até **10 chamados bem-sucedidos nos últimos 60 minutos**, independentemente de dispositivo ou reinício da aplicação. Ao atingir a quota, a API retorna HTTP 429, `Retry-After` e `retryAfterSeconds`. Registros antigos com textos maiores permanecem íntegros. Consultas de OS, PDF e dashboard compartilham um limite de 120 requisições por minuto por usuário, por instância do backend.
+
+O **Dashboard** é exclusivo do administrador. Escolha ano e mês e clique em **Aplicar período**:
+
+- **Chamados hoje:** aberturas do dia atual em Brasília, independentemente do filtro.
+- **Chamados no mês:** aberturas no mês escolhido; reaberturas não criam outra OS.
+- **Abertos, atribuídos e aceites pendentes:** situação atual de toda a fila, independentemente do período.
+- **Top 5 atribuídos:** OS atualmente atribuídas e ainda aguardando resolução, de todos os meses.
+- **Top 5 resolvidos:** OS atualmente resolvidas cuja última resolução aconteceu no mês selecionado. Uma recusa/reabertura retira a OS desta contagem; uma nova resolução usa a nova data e o novo técnico.
+- **Gráfico mensal:** aberturas e resoluções dos 12 meses do ano escolhido; meses sem registros mostram zero. Os valores também estão disponíveis em **Ver dados do gráfico**.
+
+Rankings incluem técnicos desativados quando ainda houver atendimentos pertinentes e desempates usam nome e ID. Os totais são calculados em uma única leitura do PostgreSQL. Datas usam `America/Sao_Paulo`; o relógio avança no navegador sem consultas adicionais, e o total diário é atualizado na virada do dia.
+
+A lista, os detalhes e o dashboard recebem atualizações por **SSE** (`/api/events`). O backend mantém uma conexão PostgreSQL `LISTEN` por instância; triggers enviam notificações somente após o commit. Alterações de envio do email também atualizam os detalhes. Cada perfil recebe apenas eventos autorizados, inclusive o técnico que perde uma atribuição. A interface agrupa atualizações por 300 ms, preservando filtros e campos em edição. Ao reconectar, consulta novamente a situação atual; não há reprodução de eventos antigos. O estado da conexão aparece no menu.
+
+São permitidas até três telas conectadas por usuário em cada instância do backend. Sessões são verificadas em lote a cada 30 segundos; expiração ou desativação encerra a atualização. Se houver reverse proxy, mantenha o streaming sem buffering e permita conexões duradouras para `/api/events`.
+
+No cabeçalho, o administrador pode clicar em **Ativar som**. Um aviso sonoro toca para novas OS recebidas enquanto aquela aba estiver conectada. Atribuições, resoluções, carregamentos e reconexões não reproduzem esse aviso. **Desativar som** interrompe os alertas; após recarregar a página é necessário ativá-los novamente, respeitando a política de áudio do navegador.
+
+Todos os usuários podem alternar **Tema claro/escuro**, inclusive no login e na confirmação pública. A preferência fica em `localStorage` por usuário e navegador; não acompanha outros dispositivos. Sem preferência salva, segue o tema do sistema operacional. Páginas públicas têm uma preferência própria.
 
 ## Executar com Docker
 
@@ -172,6 +197,8 @@ GET    /api/users
 POST   /api/users                          { name, email, role, temporaryPassword }
 PATCH  /api/users/:id                      { active?, temporaryPassword? }
 GET    /api/technicians
+GET    /api/dashboard                     ?year=YYYY&month=MM (ADMIN)
+GET    /api/events                        (SSE autenticado)
 GET    /api/orders                        ?from=YYYY-MM-DD&to=YYYY-MM-DD&requester=...&number=...&page=1
 POST   /api/orders                        { title, description }
 GET    /api/orders/:id
@@ -203,15 +230,15 @@ Para simular os três perfis no mesmo computador, saia da conta antes de entrar 
 ### 2. Solicitante abre o chamado
 
 1. Entre com a conta de solicitante e conclua a troca da senha temporária, se solicitada.
-2. Em **Ordens de serviço**, clique em **Nova ordem**.
-3. Preencha **Título do chamado** e **Descrição** e clique em **Abrir ordem de serviço**.
+2. Em **Chamados**, clique em **Nova ordem**.
+3. Preencha **Título do chamado** (até 50 caracteres) e **Descrição** (até 255 caracteres) e clique em **Abrir ordem de serviço**. São permitidas até 10 aberturas em 60 minutos.
 4. Anote o número gerado. A OS aparece como **Aberto**, com solicitante e data de abertura registrados automaticamente.
 
 O solicitante pode consultar suas OS e usar **Baixar PDF** desde essa etapa.
 
 ### 3. Administrador atribui o técnico
 
-1. Entre como administrador e encontre a OS na consulta. Use o número, o nome do solicitante ou o intervalo da data de abertura.
+1. Entre como administrador e encontre a OS em **Chamados**. Use o número, o nome do solicitante ou o intervalo da data de abertura. Para receber avisos sonoros de novas OS, clique em **Ativar som**.
 2. Abra a OS, selecione um técnico ativo no campo **Técnico** e clique em **Atribuir OS**.
 3. Confira o status **Atribuído a [nome do técnico]**. A ordem passa a aparecer na lista desse técnico.
 
@@ -239,7 +266,20 @@ O link vale por 72 horas e permite uma única resposta. Se expirar, peça um ree
 
 ### 6. Consultar e baixar o registro
 
-1. Retorne a **Ordens de serviço** com uma conta autorizada a acessar a OS.
-2. Combine **Data inicial**, **Data final**, **Solicitante** e **Número da OS** e clique em **Consultar**. As datas filtram a abertura do chamado, não a resolução.
+1. Retorne a **Chamados** com uma conta autorizada a acessar a OS.
+2. Combine **Data inicial**, **Data final** e **Número da OS** e clique em **Consultar**. Técnicos e administradores também têm o filtro **Solicitante**. As datas filtram a abertura do chamado, não a resolução.
 3. Abra a ordem para revisar o status, a situação do aceite e o histórico.
 4. Clique em **Baixar PDF** para obter o relatório atualizado. Após o aceite, o PDF inclui o registro da confirmação; após uma recusa, inclui a justificativa e a reabertura.
+
+### 7. Administrador acompanha o dashboard
+
+1. Abra **Dashboard** no menu. Consulte os totais do dia, do mês e da fila atual.
+2. Escolha ano e mês e clique em **Aplicar período** para atualizar o total mensal e o ranking de resolvidos. O gráfico considera os 12 meses do ano escolhido.
+3. Acompanhe as mudanças automaticamente, sem recarregar a página. O ranking de atribuídos continua mostrando toda a carga pendente atual.
+4. Use o botão de tema no cabeçalho para escolher claro ou escuro; cada usuário mantém sua preferência naquele navegador.
+
+## Atualização e reversão da versão
+
+`002_live_updates.sql` é aditiva: cria índices e triggers, sem alterar campos, chamados, histórico ou senhas. A inicialização aplica migrations pendentes uma única vez, dentro de transação. Faça o rebuild com `docker compose up -d --build` e confira a validação dos containers. Não remova o volume do PostgreSQL.
+
+Para reverter a aplicação, restaure a versão anterior do código e reconstrua a imagem mantendo o banco e a migration aditiva. A versão anterior pode continuar lendo os mesmos dados; os índices e triggers não exigem redução de campos ou remoção de registros. A quota de abertura é uma regra da aplicação nova e deixa de ser aplicada caso volte ao backend anterior.

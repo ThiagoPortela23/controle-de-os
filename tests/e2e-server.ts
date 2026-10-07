@@ -27,6 +27,7 @@ try {
   let stopping = false;
   const shutdown = () => {
     if (stopping) return; stopping = true;
+    void app.locals.realtime.close();
     server.close(async () => {
       app.locals.sessionStore.close(); await database.stop(); mailpit.kill(); process.exit(0);
     });

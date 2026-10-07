@@ -1,10 +1,13 @@
-import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api, json, setCsrf } from './api';
 import type { User } from './types';
-import { Field, Icon, Loading, Notice, date, roles } from './ui';
+import { Brand, Field, Icon, Loading, Notice, PasswordInput, date, roles } from './ui';
 import { OrderList, NewOrder, OrderDetail } from './Orders';
 import { Users } from './Users';
+import { Dashboard } from './Dashboard';
+import { LiveProvider, useLive } from './Live';
+import { ThemeScope, ThemeToggle } from './Theme';
 
 const Auth = createContext<{ user: User; update: (user: User | null) => void } | null>(null);
 export function useAuth() { return useContext(Auth)!; }
@@ -18,22 +21,27 @@ export function App() {
 function PrivateApp() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const expire = useCallback(() => { setCsrf(''); setUser(null); }, []);
+  useEffect(() => { window.addEventListener('session-expired', expire); return () => window.removeEventListener('session-expired', expire); }, [expire]);
   useEffect(() => { api<Session>('/auth/me').then(data => { setUser(data.user); setCsrf(data.csrfToken); }).catch(() => {}).finally(() => setLoading(false)); }, []);
   if (loading) return <Loading />;
   if (!user) return <Login onLogin={setUser} />;
   return <Auth.Provider value={{ user, update: setUser }}>
-    <Shell>{user.must_change_password ? <Password mandatory /> : <Routes>
-      <Route path="/" element={<OrderList />} />
+    <ThemeScope userId={user.id} /><LiveProvider user={user} onExpired={expire}><Shell>{user.must_change_password ? <Password mandatory /> : <Routes>
+      <Route path="/" element={<Navigate to="/ordens" replace />} />
+      <Route path="/ordens" element={<OrderList />} />
+      <Route path="/dashboard" element={user.role === 'ADMIN' ? <Dashboard /> : <Navigate to="/ordens" replace />} />
       <Route path="/ordens/nova" element={user.role === 'REQUESTER' ? <NewOrder /> : <Navigate to="/" replace />} />
       <Route path="/ordens/:id" element={<OrderDetail />} />
       <Route path="/usuarios" element={user.role === 'ADMIN' ? <Users /> : <Navigate to="/" replace />} />
       <Route path="/senha" element={<Password />} />
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>}</Shell>
+    </Routes>}</Shell></LiveProvider>
   </Auth.Provider>;
 }
 function Shell({ children }: { children: ReactNode }) {
   const { user, update } = useAuth();
+  const live = useLive();
   const [error, setError] = useState('');
   const [leaving, setLeaving] = useState(false);
   async function logout() {
@@ -44,16 +52,16 @@ function Shell({ children }: { children: ReactNode }) {
   }
   return <div className="app-shell">
     <aside className="sidebar">
-      <Link className="brand" to="/"><span className="brand-mark"><Icon name="file" size={25} /></span><span>ordem<span className="brand-dot">.</span><small>GESTÃO DE SERVIÇOS</small></span></Link>
+      <Link to="/ordens" aria-label="Central de Serviços"><Brand /></Link>
       <div className="nav-label">ÁREA DE TRABALHO</div>
-      <nav><NavLink to="/" end><Icon name="grid" />Ordens de serviço</NavLink>{user.role === 'ADMIN' && <NavLink to="/usuarios"><Icon name="users" />Usuários</NavLink>}</nav>
-      <div className="sidebar-note"><span className="live-dot" />Atendimento com registro<small>Do chamado ao aceite,<br />cada etapa no mesmo lugar.</small></div>
+      <nav><NavLink to="/ordens" end><Icon name="file" />Chamados</NavLink>{user.role === 'ADMIN' && <><NavLink to="/dashboard"><Icon name="grid" />Dashboard</NavLink><NavLink to="/usuarios"><Icon name="users" />Usuários</NavLink></>}</nav>
+      <div className="sidebar-note"><span className={`live-dot ${live.connected ? '' : 'offline'}`} /><span role="status">{live.connected ? 'Atualização conectada' : user.must_change_password ? 'Troque a senha para continuar' : 'Reconectando atualização…'}</span><small>Do chamado ao aceite,<br />cada etapa no mesmo lugar.</small></div>
       <div className="sidebar-user"><div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><small>{roles[user.role]}</small></div></div>
     </aside>
     <div className="workspace">
-      <header className="topbar"><span>Operações <span className="slash">/</span> <strong>Central de serviços</strong></span><div className="topbar-actions"><Link to="/senha">Trocar senha</Link><button className="icon-button" aria-label="Sair" title="Sair" disabled={leaving} onClick={logout}><Icon name="logout" /></button></div></header>
-      <main><Notice message={error} error />{children}</main>
-      <footer className="workspace-footer">CONTROLE DE OS <span>Datas no horário de Brasília</span></footer>
+      <header className="topbar"><span className="topbar-title">Central de Serviços</span><div className="topbar-actions">{user.role === 'ADMIN' && !user.must_change_password && <button className="preference-button" aria-pressed={live.soundEnabled} onClick={() => void live.toggleSound()}><Icon name="bell" size={17} /><span>{live.soundEnabled ? 'Desativar som' : 'Ativar som'}</span></button>}<ThemeToggle /><Link to="/senha">Trocar senha</Link><button className="icon-button" aria-label="Sair" title="Sair" disabled={leaving} onClick={logout}><Icon name="logout" /></button></div></header>
+      <main>{live.newOrder !== null && <div className="live-notification" role="status">Novo chamado recebido: #{String(live.newOrder).padStart(4, '0')}.</div>}<Notice message={error || live.soundError} error />{children}</main>
+      <footer className="workspace-footer">CENTRAL DE SERVIÇOS <span>Datas no horário de Brasília</span></footer>
     </div>
   </div>;
 }
@@ -70,8 +78,8 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     } catch (error) { setError(messageOf(error)); }
     finally { setBusy(false); }
   }
-  return <div className="login-layout"><section className="login-story"><div className="brand"><span className="brand-mark"><Icon name="file" size={27} /></span><span>ordem.</span></div><div><span className="eyebrow">CADA ETAPA, DOCUMENTADA</span><h1>Seu atendimento.<br />Em boa ordem.</h1><p>Organize chamados, acompanhe a solução e registre a confirmação de quem recebeu o serviço.</p><div className="story-step"><span>01</span>Abertura do chamado</div><div className="story-step"><span>02</span>Atendimento pelo técnico</div><div className="story-step"><span>03</span>Aceite do solicitante</div></div><small>Uma central para todo o caminho.</small></section>
-    <section className="login-form-area"><div className="login-card"><span className="eyebrow">CENTRAL DE SERVIÇOS</span><h2>Acesse sua conta</h2><p>Entre com o acesso fornecido pelo administrador.</p><Notice message={error} error /><form onSubmit={submit}><Field label="Email"><input name="email" type="email" autoComplete="username" required placeholder="voce@empresa.com" /></Field><Field label="Senha"><input name="password" type="password" autoComplete="current-password" required maxLength={128} placeholder="Sua senha" /></Field><button className="button full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar na central'}</button></form><div className="login-help">Precisa de acesso ou esqueceu a senha?<br />Entre em contato com o administrador.</div></div></section>
+  return <div className="login-layout"><section className="login-story"><Brand /><div><span className="eyebrow">CADA ETAPA, DOCUMENTADA</span><h1>Atendimento simples.<br />Equipe conectada.</h1><p>Organize chamados, acompanhe a solução e registre a confirmação de quem recebeu o serviço.</p><div className="story-step"><span>01</span>Abertura do chamado</div><div className="story-step"><span>02</span>Atendimento pelo técnico</div><div className="story-step"><span>03</span>Aceite do solicitante</div></div><small>Uma central para todo o caminho.</small></section>
+    <section className="login-form-area"><div className="public-controls"><ThemeToggle /></div><div className="login-card"><span className="eyebrow">CENTRAL DE SERVIÇOS</span><h2>Acesse sua conta</h2><p>Entre com o acesso fornecido pelo administrador.</p><Notice message={error} error /><form onSubmit={submit}><Field label="Email"><input name="email" type="email" autoComplete="username" required placeholder="voce@empresa.com" /></Field><Field label="Senha"><PasswordInput name="password" autoComplete="current-password" required maxLength={128} placeholder="Sua senha"  visibilityLabel="senha" /></Field><button className="button full" disabled={busy}>{busy ? 'Entrando…' : 'Entrar na central'}</button></form><div className="login-help">Precisa de acesso ou esqueceu a senha?<br />Entre em contato com o administrador.</div></div></section>
   </div>;
 }
 function Password({ mandatory = false }: { mandatory?: boolean }) {
@@ -89,7 +97,7 @@ function Password({ mandatory = false }: { mandatory?: boolean }) {
     } catch (error) { setError(messageOf(error)); }
     finally { setBusy(false); }
   }
-  return <><div className="page-heading"><div><span className="eyebrow">SUA CONTA</span><h1>{mandatory ? 'Defina sua senha' : 'Trocar senha'}</h1><p>{mandatory ? 'Troque a senha temporária antes de acessar a central.' : 'Use uma senha diferente da atual, com pelo menos 10 caracteres.'}</p></div></div><section className="panel form-panel"><Notice message={error} error /><form onSubmit={submit}><Field label="Senha atual"><input type="password" name="currentPassword" autoComplete="current-password" required maxLength={128} /></Field><Field label="Nova senha"><input type="password" name="newPassword" autoComplete="new-password" required minLength={10} maxLength={128} /></Field><Field label="Repita a nova senha"><input type="password" name="repeat" autoComplete="new-password" required minLength={10} maxLength={128} /></Field><button className="button" disabled={busy}>{busy ? 'Salvando…' : 'Salvar nova senha'}</button></form></section></>;
+  return <><div className="page-heading"><div><span className="eyebrow">SUA CONTA</span><h1>{mandatory ? 'Defina sua senha' : 'Trocar senha'}</h1><p>{mandatory ? 'Troque a senha temporária antes de acessar a central.' : 'Use uma senha diferente da atual, com pelo menos 10 caracteres.'}</p></div></div><section className="panel form-panel"><Notice message={error} error /><form onSubmit={submit}><Field label="Senha atual"><PasswordInput name="currentPassword" autoComplete="current-password" required maxLength={128}  visibilityLabel="senha atual" /></Field><Field label="Nova senha"><PasswordInput name="newPassword" autoComplete="new-password" required minLength={10} maxLength={128}  visibilityLabel="nova senha" /></Field><Field label="Repita a nova senha"><PasswordInput name="repeat" autoComplete="new-password" required minLength={10} maxLength={128}  visibilityLabel="repetição da senha" /></Field><button className="button" disabled={busy}>{busy ? 'Salvando…' : 'Salvar nova senha'}</button></form></section></>;
 }
 interface PublicConfirmation { number: number; title: string; description: string; solution: string; technician: string; requester: string; resolvedAt: string; expiresAt: string }
 function Confirmation() {
@@ -107,7 +115,7 @@ function Confirmation() {
     catch (error) { setError(messageOf(error)); }
     finally { setBusy(false); }
   }
-  return <div className="confirmation-layout"><div className="public-brand"><span className="brand-mark"><Icon name="file" /></span>ordem.</div><section className="panel confirmation-card">
+  return <div className="confirmation-layout"><div className="public-controls"><ThemeToggle /></div><div className="public-brand"><Brand /></div><section className="panel confirmation-card">
     {loading ? <Loading /> : outcome ? <div className="success-state"><span className="success-icon"><Icon name="check" size={32} /></span><h1>{rejecting ? 'OS reaberta' : 'Aceite confirmado'}</h1><p>{outcome}</p><small>Você pode fechar esta página.</small></div> : <>
       <span className="eyebrow">CONFIRMAÇÃO DE ATENDIMENTO</span><h1>O problema foi resolvido?</h1><Notice message={error} error />{data && <>
         <p>Olá, <strong>{data.requester}</strong>. Revise o serviço antes de registrar seu aceite.</p><div className="public-order"><span className="order-number">OS #{data.number}</span><h2>{data.title}</h2><p className="preserve">{data.description}</p><dl><div><dt>Técnico</dt><dd>{data.technician}</dd></div><div><dt>Concluído em</dt><dd>{date(data.resolvedAt)}</dd></div></dl><h3>Solução informada</h3><p className="preserve">{data.solution}</p></div>
