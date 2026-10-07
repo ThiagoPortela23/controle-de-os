@@ -8,6 +8,7 @@ import { Users } from './Users';
 import { Dashboard } from './Dashboard';
 import { LiveProvider, useLive } from './Live';
 import { ThemeScope, ThemeToggle } from './Theme';
+import { UserMenu } from './UserMenu';
 
 const Auth = createContext<{ user: User; update: (user: User | null) => void } | null>(null);
 export function useAuth() { return useContext(Auth)!; }
@@ -45,7 +46,8 @@ function Shell({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [leaving, setLeaving] = useState(false);
   async function logout() {
-    setLeaving(true);
+    if (leaving) return;
+    setLeaving(true); setError('');
     try { await api('/auth/logout', { method: 'POST' }); setCsrf(''); update(null); }
     catch (error) { setError(messageOf(error)); }
     finally { setLeaving(false); }
@@ -59,7 +61,7 @@ function Shell({ children }: { children: ReactNode }) {
       <div className="sidebar-user"><div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div><div><strong>{user.name}</strong><small>{roles[user.role]}</small></div></div>
     </aside>
     <div className="workspace">
-      <header className="topbar"><span className="topbar-title">Central de Serviços</span><div className="topbar-actions">{user.role === 'ADMIN' && !user.must_change_password && <button className="preference-button" aria-pressed={live.soundEnabled} onClick={() => void live.toggleSound()}><Icon name="bell" size={17} /><span>{live.soundEnabled ? 'Desativar som' : 'Ativar som'}</span></button>}<ThemeToggle /><Link to="/senha">Trocar senha</Link><button className="icon-button" aria-label="Sair" title="Sair" disabled={leaving} onClick={logout}><Icon name="logout" /></button></div></header>
+      <header className="topbar"><span className="topbar-title">Central de Serviços</span><div className="topbar-actions">{user.role === 'ADMIN' && !user.must_change_password && <button className="preference-button" aria-pressed={live.soundEnabled} onClick={() => void live.toggleSound()}><Icon name="bell" size={17} /><span>{live.soundEnabled ? 'Desativar som' : 'Ativar som'}</span></button>}<ThemeToggle /><UserMenu user={user} leaving={leaving} onLogout={logout} /></div></header>
       <main>{live.newOrder !== null && <div className="live-notification" role="status">Novo chamado recebido: #{String(live.newOrder).padStart(4, '0')}.</div>}<Notice message={error || live.soundError} error />{children}</main>
       <footer className="workspace-footer">CENTRAL DE SERVIÇOS <span>Datas no horário de Brasília</span></footer>
     </div>

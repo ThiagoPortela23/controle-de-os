@@ -45,11 +45,14 @@ export function Loading() { return <div className="empty-state" role="status">Ca
 export function Brand() {
   return <span className="brand"><img className="brand-mark" src="/logo.svg" alt="" /><span>Central de<small className="brand-name">Serviços</small></span></span>;
 }
-export function Icon({ name, size = 20 }: { name: 'grid' | 'file' | 'users' | 'plus' | 'download' | 'arrow' | 'logout' | 'check' | 'search' | 'moon' | 'sun' | 'bell' | 'eye' | 'eye-off'; size?: number }) {
+export function Icon({ name, size = 20 }: { name: 'grid' | 'file' | 'users' | 'plus' | 'download' | 'arrow' | 'logout' | 'check' | 'search' | 'moon' | 'sun' | 'bell' | 'eye' | 'eye-off' | 'user' | 'key' | 'fullscreen'; size?: number }) {
   const paths = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
     file: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>,
     users: <><circle cx="9" cy="7" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5.7" /></>,
+    user: <><circle cx="12" cy="8" r="4" /><path d="M4 22v-2a8 8 0 0 1 16 0v2" /></>,
+    key: <><circle cx="8" cy="8" r="5" /><path d="m11.5 11.5 9 9M16 16l3-3M19 19l3-3" /></>,
+    fullscreen: <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />,
     plus: <path d="M12 5v14M5 12h14" />,
     download: <><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></>,
     arrow: <path d="M19 12H5m6-6-6 6 6 6" />,

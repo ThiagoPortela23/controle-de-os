@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { api } from './api';
 import { useLive } from './Live';
-import { Field, Loading, Notice } from './ui';
+import { Brand, Field, Icon, Loading, Notice } from './ui';
+import { usePresentation } from './usePresentation';
 import type { DashboardData, Ranking } from './types';
 
 const zone = 'America/Sao_Paulo';
@@ -13,7 +14,7 @@ function period(now: Date) {
 function RankingPanel({ title, description, items }: { title: string; description: string; items: Ranking[] }) {
   return <section className="panel ranking-panel"><div className="panel-heading"><div><h2>{title}</h2><p>{description}</p></div></div>
     {items.length ? <ol className="ranking-list">{items.map((item, index) => <li key={item.id}>
-      <span className="ranking-position">{index + 1}</span><div><strong>{item.name}</strong><progress aria-label={`${item.name}: ${item.total} chamados`} value={item.total} max={items[0].total} /></div>
+      <span className="ranking-position">{index + 1}</span><div><strong title={item.name}>{item.name}</strong><progress aria-label={`${item.name}: ${item.total} chamados`} value={item.total} max={items[0].total} /></div>
       <span className="ranking-total">{item.total}<small>chamados</small></span>
     </li>)}</ol> : <div className="empty-state">Nenhum atendimento neste ranking.</div>}
   </section>;
@@ -37,7 +38,8 @@ function MonthlyChart({ series, year }: { series: DashboardData['monthlySeries']
   </section>;
 }
 export function Dashboard() {
-  const { revision } = useLive(); const initial = period(new Date());
+  const { revision, connected } = useLive(); const initial = period(new Date());
+  const presentation = usePresentation();
   const [year, setYear] = useState(initial.year); const [month, setMonth] = useState(initial.month);
   const [now, setNow] = useState(new Date()); const [data, setData] = useState<DashboardData | null>(null); const [error, setError] = useState('');
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(now);
@@ -48,16 +50,28 @@ export function Dashboard() {
       .catch(error => { if (!controller.signal.aborted) setError(error.message); });
     return () => controller.abort();
   }, [year, month, revision, day]);
-  return <><div className="page-heading"><div><span className="eyebrow">VISÃO DA OPERAÇÃO</span><h1>Dashboard</h1><p>Fila de atendimento, volume de chamados e resultados da equipe.</p></div>
-    <div className="dashboard-clock"><strong aria-label="Hora de Brasília">{new Intl.DateTimeFormat('pt-BR', { timeZone: zone, timeStyle: 'medium' }).format(now)}</strong>
-      <span>{new Intl.DateTimeFormat('pt-BR', { timeZone: zone, dateStyle: 'long' }).format(now)}</span><small>Horário de Brasília</small></div></div>
-    <section className="panel"><form className="dashboard-filters" onSubmit={event => {
+  return <section ref={presentation.stage} className={`dashboard-stage ${presentation.presenting ? 'is-presenting' : ''}`}
+    aria-label={presentation.presenting ? 'Dashboard em apresentação' : 'Dashboard'}>
+    {presentation.presenting && <button ref={presentation.exitButton} className="button secondary presentation-exit" type="button"
+      onClick={() => void presentation.exit()}><Icon name="arrow" size={17} />Voltar ao dashboard</button>}
+    <div className="dashboard-canvas" style={{ '--presentation-scale': presentation.scale } as CSSProperties}>
+    <div className="page-heading dashboard-heading"><div className="dashboard-title-group">
+      {presentation.presenting && <Brand />}<div><span className="eyebrow">VISÃO DA OPERAÇÃO</span><h1>Dashboard</h1>
+      <p>{presentation.presenting ? `${months[month - 1]} de ${year} · Fila atual e indicadores do período` : 'Fila de atendimento, volume de chamados e resultados da equipe.'}</p>
+      {presentation.presenting && <><span className="presentation-connection" role="status"><span className={`live-dot ${connected ? '' : 'offline'}`} />
+        {connected ? 'Atualização conectada' : 'Reconectando atualização…'}</span>{presentation.message && <span className="presentation-message" role="status">{presentation.message}</span>}</>}
+      </div></div><div className="dashboard-heading-actions"><div className="dashboard-clock"><strong aria-label="Hora de Brasília">{new Intl.DateTimeFormat('pt-BR', { timeZone: zone, timeStyle: 'medium' }).format(now)}</strong>
+      <span>{new Intl.DateTimeFormat('pt-BR', { timeZone: zone, dateStyle: 'long' }).format(now)}</span><small>Horário de Brasília</small></div>
+      {!presentation.presenting && <button type="button" className="button secondary" ref={presentation.enterButton} disabled={!data}
+        onClick={() => void presentation.enter()}><Icon name="fullscreen" size={18} />Apresentar em tela cheia</button>}
+    </div></div>
+    <section className="panel dashboard-controls"><form className="dashboard-filters" onSubmit={event => {
       event.preventDefault(); const values = new FormData(event.currentTarget); setYear(Number(values.get('year'))); setMonth(Number(values.get('month')));
     }}><Field label="Ano"><input type="number" name="year" min={2000} max={9999} defaultValue={year} required /></Field>
       <Field label="Mês"><select name="month" defaultValue={month}>{months.map((name, index) => <option value={index + 1} key={name}>{name}</option>)}</select></Field>
       <button className="button">Aplicar período</button><p>Período: {months[month - 1]} de {year}. A fila atual e o total de hoje não dependem deste filtro.</p>
-    </form></section><Notice message={error} error />
-    {!data ? !error && <Loading /> : <>
+    </form></section><div className="dashboard-feedback"><Notice message={error} error /></div>
+    {!data ? !error && <Loading /> : <div className="dashboard-data">
       <div className="stats-grid dashboard-stats">{([
         ['Chamados hoje', data.dailyTotal, `abertos hoje - ${new Intl.DateTimeFormat('pt-BR', { timeZone: zone, day: '2-digit', month: '2-digit' }).format(now)}`, 'dailyTotal'],
         ['Chamados no mês', data.monthlyTotal, `${months[month - 1]} de ${year}`, 'monthlyTotal'],
@@ -65,10 +79,10 @@ export function Dashboard() {
         ['Atribuídos', data.assigned, 'Aguardando resolução', 'assigned'],
         ['Aceites pendentes', data.pendingAcceptance, 'Aguardando solicitante', 'pendingAcceptance'],
       ] as const).map(([label, value, hint, id]) => <div className="stat-card" key={id}><span className="stat-label">{label}</span><strong data-testid={`metric-${id}`}>{value}</strong><small>{hint}</small></div>)}</div>
-      <MonthlyChart series={data.monthlySeries} year={year} /><div className="rankings-grid">
+      <div className="dashboard-visuals"><MonthlyChart series={data.monthlySeries} year={year} /><div className="rankings-grid">
         <RankingPanel title="Top 5 · chamados atribuídos" description="Carga pendente atual, em todos os meses." items={data.assignedRanking} />
         <RankingPanel title="Top 5 · chamados resolvidos" description={`OS atualmente resolvidas em ${months[month - 1]} de ${year}.`} items={data.resolvedRanking} />
-      </div>
-    </>}
-  </>;
+      </div></div>
+    </div>}
+  </div></section>;
 }

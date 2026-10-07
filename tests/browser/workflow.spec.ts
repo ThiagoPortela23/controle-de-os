@@ -7,6 +7,12 @@ async function login(page: Page, email: string, password = 'TestPassword123!') {
   await page.getByRole('button', { name: 'Entrar na central' }).click();
   await expect(page.getByRole('heading', { name: 'Ordens de serviço.' })).toBeVisible();
 }
+async function logout(page: Page) {
+  await page.getByRole('button', { name: 'Menu do usuário', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Sair', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Acesse sua conta' })).toBeVisible();
+}
+
 test('solicitação, atribuição, solução, email real, aceite, PDF e consulta', async ({ browser }) => {
   const requester = await browser.newContext({ acceptDownloads: true }); const admin = await browser.newContext(); const technician = await browser.newContext();
   const requesterPage = await requester.newPage(); const adminPage = await admin.newPage(); const technicianPage = await technician.newPage();
@@ -130,9 +136,9 @@ test('dashboard, chamados e detalhes atualizam por eventos; som, reconexão e te
   await admin.getByRole('button', { name: 'Usar tema escuro', exact: true }).click();
   await admin.setViewportSize({ width: 390, height: 844 }); await admin.screenshot({ path: 'test-results/dashboard-dark-mobile.png', fullPage: true });
   expect(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await admin.getByRole('button', { name: 'Sair', exact: true }).click();
+  await logout(admin);
   await login(admin, 'ana@example.com'); await expect(admin.locator('html')).toHaveAttribute('data-theme', 'light');
-  await admin.getByRole('button', { name: 'Sair', exact: true }).click();
+  await logout(admin);
   await login(admin, 'admin@example.com', 'InitialAdmin123!'); await expect(admin.locator('html')).toHaveAttribute('data-theme', 'dark');
   await requester.goto('/dashboard'); await expect(requester).toHaveURL(/\/ordens$/);
   expect((await requester.request.get('/api/dashboard?year=2026&month=10')).status()).toBe(403);
@@ -191,7 +197,7 @@ test('administrador cria conta e solicitante troca senha temporária', async ({ 
   await page.getByRole('button', { name: 'Entrar na central' }).click(); await expect(page.getByRole('heading', { name: 'Defina sua senha' })).toBeVisible();
   await page.getByLabel('Senha atual', { exact: true }).fill('TemporaryPass123!'); await page.getByLabel('Nova senha', { exact: true }).fill('PermanentPass123!');
   await page.getByLabel('Repita a nova senha').fill('PermanentPass123!'); await page.getByRole('button', { name: 'Salvar nova senha' }).click();
-  await expect(page.getByRole('heading', { name: 'Ordens de serviço.' })).toBeVisible(); await page.getByRole('button', { name: 'Sair', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Ordens de serviço.' })).toBeVisible(); await logout(page);
   await expect(page.getByRole('heading', { name: 'Acesse sua conta' })).toBeVisible();
   await adminContext.close(); await context.close();
 });

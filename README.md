@@ -27,6 +27,20 @@ No cabeçalho, o administrador pode clicar em **Ativar som**. Um aviso sonoro to
 
 Todos os usuários podem alternar **Tema claro/escuro**, inclusive no login e na confirmação pública. A preferência fica em `localStorage` por usuário e navegador; não acompanha outros dispositivos. Sem preferência salva, segue o tema do sistema operacional. Páginas públicas têm uma preferência própria.
 
+### Menu de usuário
+
+O ícone de usuário fica no canto superior direito para todos os perfis autenticados. Clique para conferir nome e perfil, **Alterar senha** ou **Sair**. O menu também funciona por teclado: Enter/Espaço abre, as setas navegam, Home/End escolhem a primeira/última opção e Esc fecha. Tab permite sair do menu; clicar fora ou trocar de página também o fecha. O logout mantém a sessão caso a API falhe e exibe um aviso para tentar novamente.
+
+### Apresentação do dashboard em tela cheia
+
+1. Como administrador, abra **Dashboard**, escolha ano/mês e clique em **Aplicar período**.
+2. Escolha o tema e, se desejar, clique em **Ativar som** antes de apresentar.
+3. Clique em **Apresentar em tela cheia**. A apresentação mostra marca, período, relógio de Brasília, conexão, cinco indicadores, gráfico mensal e dois rankings.
+4. A composição usa proporção **16:9**, com base 1920×1080 escalada ao espaço disponível. Em 1920×1080 e 1366×768, todos os indicadores ficam visíveis sem rolagem; em outras proporções, margens preservam o formato. Nomes extensos nos rankings são abreviados visualmente e podem ser conferidos pelo tooltip.
+5. Clique em **Voltar ao dashboard** ou pressione **Esc** para restaurar a página, o período, a rolagem e o foco no botão de apresentação.
+
+Durante a apresentação, menu, cabeçalho normal, rodapé e filtros ficam ocultos. Os dados e o relógio continuam atualizando, usando a mesma conexão SSE; o som mantém o estado anterior. Se o navegador recusar a Fullscreen API, a aplicação apresenta o painel ampliado dentro da janela e informa essa condição. Ao encerrar a sessão, a apresentação também é encerrada. Esse recurso não exige alterações no banco nem novos endpoints.
+
 ## Executar com Docker
 
 Requisitos: Docker Engine/Desktop com containers Linux e Docker Compose v2 ou superior.
@@ -227,6 +241,8 @@ Perfis: `REQUESTER`, `TECHNICIAN`, `ADMIN`. Status: `OPEN`, `ASSIGNED`, `RESOLVE
 
 Para simular os três perfis no mesmo computador, saia da conta antes de entrar com outro usuário ou use perfis separados do navegador. Abas da mesma janela compartilham a sessão.
 
+Para sair ou alterar a senha posteriormente, abra o ícone de usuário no canto superior direito e escolha **Sair** ou **Alterar senha**.
+
 ### 2. Solicitante abre o chamado
 
 1. Entre com a conta de solicitante e conclua a troca da senha temporária, se solicitada.
@@ -277,6 +293,7 @@ O link vale por 72 horas e permite uma única resposta. Se expirar, peça um ree
 2. Escolha ano e mês e clique em **Aplicar período** para atualizar o total mensal e o ranking de resolvidos. O gráfico considera os 12 meses do ano escolhido.
 3. Acompanhe as mudanças automaticamente, sem recarregar a página. O ranking de atribuídos continua mostrando toda a carga pendente atual.
 4. Use o botão de tema no cabeçalho para escolher claro ou escuro; cada usuário mantém sua preferência naquele navegador.
+5. Para exibir os dados num monitor ou TV, clique em **Apresentar em tela cheia**. Configure período, tema e som antes de entrar; use **Voltar ao dashboard** ou Esc para sair.
 
 ## Atualização e reversão da versão
 
